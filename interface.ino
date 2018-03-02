@@ -31,7 +31,7 @@ void showThresholds(float num1, float num2){
 void rgbCycle(){  // pretty lights
   for(int i = 0; i < 255; i++){
     FastLED.showColor(CHSV(i++, 255, 255)); 
-    delay(10);
+    delay(5);
   }
 }
 
@@ -43,25 +43,25 @@ void menuToggle(){
   }
 }
 
-// constantly being called in loop to update temp
 void menuCheck() {
   if (menu == 0) {
     lcdPrintTemp(tempArr[0], tempArr[1]);
   } else if (menu == 1) {
-    lcdPrintAddr(getIP());
+    if (editMode == true){
+      lcdBlinkAddr(getIP(), curIdx);
+    } else {
+      lcdPrintAddr(getIP());
+    }
     lcdPrintTraffic(getTx(), getRx()); 
   }
 }
 
 void ipEdit(){
     if(curKey == 2){          // up, increment
-      Serial.println("2");
       incIP(curIdx);
     } else if (curKey == 3){  // down, decrement
-      Serial.println("3");
       decIP(curIdx);
     } else if (curKey == 1){
-      Serial.println("1");
       if(curIdx != 0){        // wrap index
         curIdx--;
       } else {
@@ -84,14 +84,17 @@ void interface() {
     if (((curKey == 1) || (curKey == 4)) && !editMode) { // left/right keypress not during IP edit
       lcdClear();
       menuToggle();
-    } else if ((curKey == 5) && (menu == 1) && (!editMode)){
+    } else if ((curKey == 5) && (menu == 1) && (!editMode)){ // entering IP edit mode
       editMode = true;
       ipEdit();
-    } else if ((curKey == 5) && (menu == 1) && (editMode)){
+    } else if ((curKey == 5) && (menu == 1) && (editMode)){ // exiting IP edit mode, restart LAN module
       editMode = false;
+      curIdx = 0;
       lanStart();
     } else if (editMode){
       ipEdit();
+    } else if ((curKey == 2)){ // up button
+      printAllData();
     }
   }
   menuCheck();

@@ -1,73 +1,31 @@
-#include <enc28j60.h>
-#include <EtherCard.h>
-#include <net.h>
-#include <IPAddress.h>
-#include <EEPROM.h>
+#include <UIPEthernet.h>
+#include <UIPServer.h>
+#include <UIPClient.h>
+#include "utility/logging.h"
 
-int ipSlot = 10;                                       // ipSlot through ipSlot + 3 are addresses of ip address
+#define MACADDRESS 0x70,0x69,0x69,0x2D,0x30,0x31
+#define MYIPADDR 10,0,6,160
+#define MYIPMASK 255,255,255,0
+#define MYDNS 192,168,1,1
+#define MYGW 10,0,0,254
+#define LISTENPORT 1000
+#define UARTBAUD 115200
+
+uint8_t mac[6] = {MACADDRESS};
+uint8_t myIP[4] = {MYIPADDR};
+uint8_t myMASK[4] = {MYIPMASK};
+uint8_t myDNS[4] = {MYDNS};
+uint8_t myGW[4] = {MYGW};
+int ipSlot = 10;                                                            // ipSlot through ipSlot + 3 are locations of ip address
 int receiveCnt;
 int transmitCnt;
+char resp[8];                                                               // response to be sent via UDP
+int scaledTemp1, scaledTemp2;                                               // temperature value after application of scaling table
+byte temp11, temp12, temp21, temp22;                                        // two scaled temperature values translated to hex and split into two values for transmission
 
-// ethernet interface ip, gateway, and mac addresses
-byte myip[] = { 10, 0, 6, 160 };
-//byte myip[];
-static byte gwip[] = { 10, 0, 0, 254 };
-static byte mymac[] = { 0x70,0x69,0x69,0x2D,0x30,0x31 };
-byte Ethernet::buffer[100]; // tcp/ip send and receive buffer
+EthernetServer server = EthernetServer(LISTENPORT);
 
-void udpRespond(uint8_t * ip, uint8_t * port){
-  byte response[] = "TAATFAT01T2AT10T11T01T12";
-  ether.sendUdp(response, 3, 2001, ip, port);
-  Serial.println("done");
-}
-
-void retrieveIP(){
-    myip[0] = EEPROM.read(ipSlot);
-    myip[1] = EEPROM.read(ipSlot + 1);
-    myip[2] = EEPROM.read(ipSlot + 2);
-    myip[3] = EEPROM.read(ipSlot + 3);
-}
-
-void storeIP() {
-    EEPROM.write(ipSlot, myip[0]);
-    EEPROM.write(ipSlot + 1, myip[1]);
-    EEPROM.write(ipSlot + 2, myip[2]);
-    EEPROM.write(ipSlot + 3, myip[3]);
-}
-
-// increment IP address at position idx
-void incIP(int idx){
-  myip[idx]++;
-  storeIP();
-//  ether.printIp(myip);
-}
-
-// decrement IP address at position idx
-void decIP(int idx){
-  myip[idx]--;
-  storeIP();
-//  ether.printIp(myip);
-}
-
-//callback that prints received packets to the serial port
-void udpSerialPrint(uint16_t dest_port, uint8_t src_ip[IP_LEN], uint16_t src_port, const char *data, uint16_t len){
-  IPAddress src(src_ip[0],src_ip[1],src_ip[2],src_ip[3]);
-  
-  Serial.print("dest_port: ");
-  Serial.println(dest_port);
-  Serial.print("src_port: ");
-  Serial.println(src_port);
-  
-  Serial.println("src_ip: ");
-  ether.printIp(src_ip);
-  Serial.println("data: ");
-  Serial.println(data);
-  receiveCnt++;
-  ledBlink(1);
-  udpRespond(src_ip, src_port);
-}
-
-void ledBlink(int idx) {
+void ledBlinkRG(int idx) {
   for (int i = 0; i < 3; i++) {
     leds[idx] = CRGB(255, 0, 0);
     FastLED.show();
@@ -78,38 +36,115 @@ void ledBlink(int idx) {
   }
 }
 
-void lanStart(){
-  if (ether.begin(sizeof Ethernet::buffer, mymac) == 0) {
-    Serial.println( "Failed to access Ethernet controller");
+void lanStart() {
+    #if ACTLOGLEVEL>LOG_NONE
+    #if defined(ARDUINO)
+      LogObject.begin(UARTBAUD);
+    #endif
+    #if defined(__MBED__)
+      Serial LogObject(SERIAL_TX,SERIAL_RX);
+      LogObject.baud(UARTBAUD);
+    #endif
+  #endif
+  
+  // initialize the ethernet device
+  Ethernet.begin(mac,myIP,myDNS,myGW,myMASK);
+  server.begin();
+  rgbCycle();
+}
+
+void clientWatch(){
+  size_t size;
+
+  if (EthernetClient client = server.available())
+    {
+      if (client)
+        {
+          while((size = client.available()) > 0)
+            {
+              uint8_t* msg = (uint8_t*)malloc(size);
+              size = client.read(msg,size);
+              #if ACTLOGLEVEL>=LOG_INFO
+                LogObject.uart_send_buf_len(msg,size);
+              #endif
+              client.write(msg,size);
+              free(msg);
+            }
+        }
+    }
+}
+
+// retrieve IP from EEPROM
+void retrieveIP() {
+  if(EEPROM.read(ipSlot) != 0){
+    myip[0] = EEPROM.read(ipSlot);
+    myip[1] = EEPROM.read(ipSlot + 1);
+    myip[2] = EEPROM.read(ipSlot + 2);
+    myip[3] = EEPROM.read(ipSlot + 3);
   }
-  retrieveIP();
-  ether.staticSetup(myip, gwip); 
-  ether.printIp("IP:  ", ether.myip);
-  ether.printIp("GW:  ", ether.gwip);  
-  //register udpSerialPrint() to port 2001
-  ether.udpServerListenOnPort(&udpSerialPrint, 2001);
-
-  //register udpSerialPrint() to port 19.
-  ether.udpServerListenOnPort(&udpSerialPrint, 19);
 }
 
-void lanPacketLoop(){
-  ether.packetLoop(ether.packetReceive());
+// store IP in EEPROM
+void storeIP() {
+  EEPROM.write(ipSlot, myip[0]);
+  EEPROM.write(ipSlot + 1, myip[1]);
+  EEPROM.write(ipSlot + 2, myip[2]);
+  EEPROM.write(ipSlot + 3, myip[3]);
 }
 
-int getIP(){
-  return myip;
+void genBCH(byte curByte, byte* bch)
+{
+  int i;
+  *bch ^= curByte; // XOR w/byte xmtd
+
+  for ( i = 0; i < 8; i++ ) {
+    if ((*bch & 1) == 1)
+      *bch = (*bch >> 1) ^ 0xB8; // shl and XOR w/BCH poly
+    else
+      *bch = (*bch >> 1);
+  }
 }
 
-int getTx(){
+byte genRespondBCH(byte *buff, int count)
+{
+  byte bch = 0, fBCHpoly;
+  int i;
+
+  for ( i = 0; i < count; i++ ) {
+    genBCH(buff[i], &bch);
+  }
+
+  bch ^= 0xFF; // XOR w/final BCH poly
+
+  // store it and return it
+  buff[i] = bch;
+  return (bch);
+}
+
+// increment IP address at position idx
+void incIP(int idx) {
+  if (myip[idx] < 255) {
+    myip[idx]++;
+    storeIP();
+  }
+}
+
+// decrement IP address at position idx
+void decIP(int idx) {
+  if (myip[idx] > 0) {
+    myip[idx]--;
+    storeIP();
+  }
+}
+
+int getIP() {
+  return myIP;
+}
+
+int getTx() {
   return transmitCnt;
 }
 
-int getRx(){
+int getRx() {
   return receiveCnt;
 }
-
-
-
-
-

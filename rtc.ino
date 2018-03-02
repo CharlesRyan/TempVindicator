@@ -2,6 +2,8 @@
 DS3231_Simple Clock;
 #include <EEPROM.h>
 
+int rtcSlot = 0;                                          // rtcSlot through rtcSlot + 5 are addresses of date and time 
+
 void rtcStart(){
   Clock.begin();
 }
@@ -17,6 +19,10 @@ void rtcSet(byte d, byte mo, byte y, byte h, byte mi){
   Clock.write(MyTimestamp);
 }
 
+int getTimeSlot(){
+  return rtcSlot;
+}
+
 void storeTime(int headTime){
     DateTime theTime = Clock.read();
     EEPROM.write(headTime, theTime.Year);
@@ -25,8 +31,8 @@ void storeTime(int headTime){
     EEPROM.write(headTime + 3, theTime.Hour);
     EEPROM.write(headTime + 4, theTime.Minute);
   
-//  for(int i = 0; i < 5; i++){ // print timestamp upon write
-//    int yargh = EEPROM.read(headTime + i);
-//    Serial.println(yargh);
-//  }
+  for(int i = 0; i < 5; i++){ // print timestamp upon write
+    int yargh = EEPROM.read(headTime + i);
+    Serial.println(yargh);
+  }
 }

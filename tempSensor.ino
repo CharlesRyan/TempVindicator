@@ -2,28 +2,30 @@
 #include <EEPROM.h>
 
 // Temp/Hum setup
-int pinDHT1 = 2;              // Temp sensor 1 setup at pin 2
-int pinDHT2 = A3;              // Temp sensor 2 setup at analog pin 3
+int pinDHT1 = 2;                // Temp sensor 1 setup at pin 2
+int pinDHT2 = A3;               // Temp sensor 2 setup at analog pin 3
 SimpleDHT22 dht22;
 
-int err;                       // DHT22
-int tempIdx = 0;               //starting index in EEPROM
-int bestIdx;                   // index of high or low value during search
-int tHead = 0;                 // pointer to oldest temp value in EEPROM
-int tTail = 0;                 // tail that tracks newest temp addition to EEPROM  
-int headTime = 96;             // 196: Year, 197: Month, 198: Day, 199: Hour, 200: Minute
-static byte chvec = 0;         // vector used in recordStats()
+int err;                        // DHT22
+int tempIdx = 0;                // starting index in EEPROM
+int bestIdx;                    // index of high or low value during search
+int tHead = 100;                // pointer to oldest temp value in EEPROM
+int tTail = 100;                // tail that tracks newest temp addition to EEPROM  
+int timeSlot = getTimeSlot();
+static byte chvec = 0;          // vector used in recordStats()
 float curTemp1;                 // updated after every period of queryDelay 
 float curTemp2;                 // updated after every period of queryDelay 
 float output[2];
-int queryDelay = 1000;         // interval after which curTemp is updated
-int writeDelay = 2000;
+int queryDelay = 1000;          // interval after which curTemp is updated
+int writeDelay = 15000;         // interval after which EEPROM at slot tTail is populated with curTemp
 
-void nuke(){
-   for( int k = 0; k < 96; k++) {
-    EEPROM.write(k, 0);
-  }
-}
+float valueScaling[] = {
+  0.00138988,
+  0.00316671,
+  0.00965092,
+  0.01827346,
+  0.02143617
+};
 
 int checkLimits(float temp, int sensor) {
   if(temp >= 98){             // MjOv
@@ -31,7 +33,7 @@ int checkLimits(float temp, int sensor) {
     Serial.print(sensor);
     Serial.println(" Major Over ");
     return 1;
-  } else if(temp >= 89) {     // MnOv
+  } else if(temp >= 85) {     // MnOv
     Serial.print("Sensor ");
     Serial.print(sensor);
     Serial.println(" Minor Over ");
@@ -56,65 +58,28 @@ void adjPtrs(){
       if (tTail >= 195){
         tTail = 100;
       } else {
-        tTail++;
+        tTail += 2;
       }
       if (tTail == tHead){
-        tHead++;
-        storeTime(headTime);
+        tHead += 2;
+        storeTime(timeSlot);
       }
       if (tHead >= 195){
         tHead = 100;
-        storeTime(headTime);
+        storeTime(timeSlot);
       }
 }
 
-void printData(byte stat) { // print values from tail to head
-  int start = tTail;
-  int limit = 0;
-  int head = tHead;
-  start -= 1;
-  int index = start;
-  float current;
-
-  while(index != (head - 1)) {
-    if(index < limit) {
-      index = 95;
-    }
-    current = EEPROM.read(index);
-    Serial.print(index);
-    Serial.print(": ");
-    Serial.println(current);
-    index--;
-  }
-  if(tHead != 100) {
-    current = EEPROM.read(index);
-    Serial.print(index);
-    Serial.print(": ");
-    Serial.println(current);
-  }
-}
-
-void recordTemp(float temp){
+void recordTemp(float temp1, float temp2){
   static unsigned long int dly;
   int timeCheck;
   switch(chvec){
     case 0:
-      EEPROM.write(tTail, temp);
-      
-//      Serial.print(hum2);
-//      Serial.print(" stored at ");
-//      Serial.println(hTail);
-//      Serial.print(temp2);
-//      Serial.print(" stored at ");
-//      Serial.println(tTail);
-//      Serial.print("hum and temp head ");
-//      Serial.print(hHead);
-//      Serial.print(" ");
-//      Serial.println(tHead);
-      
-      timeCheck = EEPROM.read(headTime);
+      EEPROM.write(tTail, temp1);
+      EEPROM.write(tTail + 1, temp2);
+      timeCheck = EEPROM.read(timeSlot);
       if (timeCheck == 0) { // if no timestamp in EEPROM
-        storeTime(headTime);
+        storeTime(timeSlot);
       }
       adjPtrs();
       dly = millis();
@@ -145,6 +110,9 @@ float * takeReading(){
       dht22.read2(pinDHT2, &output[1], NULL, NULL);
       output[0] = (1.8 * output[0]) + 32;          // convert from nonsense units
       output[1] = (1.8 * output[1]) + 32;          // to Freedom units
+      curTemp1 = output[0];
+      curTemp2 = output[1];
+      recordTemp(output[0], output[1]);
       dely = millis();
       vect++;
       return output;
@@ -166,3 +134,67 @@ float * takeReading(){
  }
 }
 
+float getTemp(int which){
+  if (which == 1){
+    return curTemp1;
+  } else if (which == 2){
+    return curTemp2;
+  }
+}
+
+int getScaledTemp(int which){
+  int scaled;
+  if (which == 1){
+    scaled = curTemp1 / valueScaling[4];
+  } else if (which == 2){
+    scaled = curTemp2 / valueScaling[4];
+  }
+  Serial.println(scaled);
+  return scaled;
+}
+
+void printData() { // print temp values from tail to head
+  int start = tTail;
+  int limit = 0;
+  int head = tHead;
+//  start -= 1;
+  int index = start;
+  float current;
+
+  while(index != (head - 1)) {
+    if(index < limit) {
+      index = 95;
+    }
+    current = EEPROM.read(index);
+    Serial.print(index);
+    Serial.print(": ");
+    Serial.println(current);
+    index--;
+  }
+  if(tHead != 100) {
+    current = EEPROM.read(index);
+    Serial.print(index);
+    Serial.print(": ");
+    Serial.println(current);
+  }
+}
+
+void printAllData(){
+  for (int i = 0; i < EEPROM.length(); i++){
+    Serial.println(EEPROM.read(i));
+  }
+}
+
+void superNuke(){
+   for( int k = 0; k < EEPROM.length(); k++) {
+    EEPROM.write(k, 0);
+  }
+}
+
+void nuke(){
+   for( int k = 100; k < 196; k++) {
+    EEPROM.write(k, 0);
+  }
+  int tHead = 100;
+  int tTail = 100;  
+}
